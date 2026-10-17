@@ -1,0 +1,198 @@
+# AI-SOC: Project Comprehensive Summary & Development Blueprint
+
+================================================================================
+1. EXECUTIVE SUMMARY & CORE PHILOSOPHY
+================================================================================
+
+AI-SOC is a lightweight, local Security Operations Center (SOC) designed to run
+on standard hardware (e.g., a laptop with 16 GB RAM) without requiring enterprise
+cloud SIEM licenses.
+
+Core Architectural Philosophy:
+"Strict, Deterministic Rules Detect Threats — AI Translates, Explains, and Guides Response."
+
+In cybersecurity, relying purely on Generative AI for alert detection introduces
+severe risks: hallucinations, non-deterministic outputs, and missed attacks.
+AI-SOC solves this by using 100% deterministic Python rules for threat detection,
+while leveraging a single integrated AI Analyst (local Ollama with qwen2.5:7b / llama3,
+backed by an offline expert playbook engine) to translate technical telemetry into
+plain English, map alerts to MITRE ATT&CK, generate remediation checklists, and produce
+exportable investigation reports.
+
+
+================================================================================
+2. PROJECT OBJECTIVES
+================================================================================
+
+1. Deterministic Accuracy: Detect known adversary behaviors (brute force, privilege
+   escalation, lateral movement, LOLBins) with zero false positives from AI hallucinations.
+2. Context-Aware Event Correlation: Aggregate disparate log events within temporal
+   windows to reconstruct multi-stage attack narratives.
+3. Automated Incident Triage & Ticketing: Cluster alerts by attacking entity (source_ip
+   or username) into actionable tickets with full lifecycles (NEW -> INVESTIGATING ->
+   CONTAINED -> CLOSED).
+4. AI-Assisted Analyst Copilot: Reduce Mean Time to Detect (MTTD) and Mean Time to
+   Respond (MTTR) by translating raw Windows event IDs into executive summaries,
+   MITRE ATT&CK tactics, and actionable remediation steps.
+5. Completely Local & Air-Gapped Capable: Zero external cloud dependencies; log parsing,
+   detection, database storage (SQLite), and AI reasoning run entirely on localhost.
+
+
+================================================================================
+3. WHAT HAS BEEN IMPLEMENTED & DEVELOPED
+================================================================================
+
+Architecture Pipeline:
+[Telemetry: Splunk BOTS v1 / JSONL]
+                |
+                v
+[Log Collection & Validation]  ------> backend/collectors/ & parser/
+                |
+                v
+[Database Persistence (SQLite)] -----> backend/database/ (soc_data.db)
+                |
+                v
+[Temporal Event Correlation]   ------> backend/correlation/engine.py
+                |
+                v
+[Threat Detection Engine (7 Rules)] -> backend/detection/rules.py
+                |
+                v
+[Incident Aggregation & Lifecycle] --> backend/incidents/engine.py
+                |
+                v
+[AI Analyst (Ollama / Fallback)] ----> backend/ai/assistant.py
+                |
+                v
+[SOC Command Center Dashboard] ------> dashboard/app.py (Streamlit)
+
+
+Key Components Built:
+
+1. Data Ingestion (scripts/extract_botsv1.py, backend/collectors/):
+   - Extracts Windows Security Event logs from the authentic 15.8 GB Splunk BOTS v1 dataset.
+   - Generates normalized JSONL scenarios (EventCodes: 4624, 4634, 4648, 4672, 4673, 4688, 4697).
+
+2. Parsing & Storage (backend/parser/, backend/database/):
+   - Pydantic validation (NormalizedEvent schema).
+   - ISO 8601 timestamp normalization, IP and port validation.
+   - Indexed SQLite relational database (soc_data.db).
+
+3. Correlation Engine (backend/correlation/engine.py):
+   - 4 correlation strategies:
+     * Source IP Correlation
+     * User Activity Correlation
+     * Network Multi-Port Connection Correlation
+     * Authentication Sequence Correlation (fail -> success -> priv esc -> execution)
+   - Configurable time window (default: 300 seconds).
+
+4. Detection Engine (backend/detection/rules.py):
+   - 7 active deterministic detection rules:
+     * RULE_BRUTE_FORCE_01 (T1110) - 5+ failed logins from same source IP.
+     * RULE_SUSPICIOUS_LOGIN_01 (T1078) - Successful login following multiple failures.
+     * RULE_PRIVILEGE_ESCALATION_01 (T1068) - Event 4672/4703 or sudo su / admin granted.
+     * RULE_SUSPICIOUS_PROCESS_01 (T1059.001) - 25+ malicious commands (PowerShell -enc, mimikatz, certutil, whoami...).
+     * RULE_PORT_SCAN_01 (T1046) - Single IP hitting 5+ unique destination ports.
+     * RULE_LATERAL_MOVEMENT_01 (T1021) - Explicit credential logons (4648) across hosts.
+     * RULE_SERVICE_INSTALL_01 (T1543.003) - Malicious Windows service creation (Event 4697).
+
+5. Incident Management (backend/incidents/engine.py):
+   - Automatically clusters unassigned detections by attacker entity (source_ip or username).
+   - Assigns severity based on highest detection severity.
+   - Tracks analyst assignment, status changes, and investigation notes.
+
+6. AI Analyst Assistant (backend/ai/assistant.py):
+   - Queries local Ollama instance (qwen2.5:7b / llama3).
+   - Offline fallback to a deterministic expert knowledge matrix if Ollama is unreachable.
+   - Automatic MITRE ATT&CK mapping across all 7 threat categories.
+   - Remediation playbooks and downloadable markdown incident investigation reports.
+
+7. SOC Dashboard (dashboard/app.py):
+   - Built with Streamlit with a dark-mode theme.
+   - Command Center with real-time metrics and detection feed.
+   - Incident Investigation & AI Assistant workbench with single-click report generation.
+   - Telemetry Explorer for searching and filtering normalized events.
+
+8. Comprehensive Test Suite (tests/):
+   - 29 unit and end-to-end integration tests passing via pytest.
+
+
+================================================================================
+4. CURRENT DRAWBACKS & LIMITATIONS
+================================================================================
+
+1. Batch/Static Log Processing Only:
+   - Ingestion relies on static files (.jsonl / CSV).
+   - Lacks real-time streaming listeners (e.g., Syslog UDP daemon, Windows Event Log live listener).
+
+2. Advisory-Only Remediation (No Active SOAR):
+   - Remediation playbooks are purely textual checklists.
+   - Cannot automatically execute containment actions (firewall block, host isolation, account disablement).
+
+3. Unused Network Datasets (MachineLearningCSV/):
+   - Contains ~800 MB of CIC-IDS2017 network traffic PCAPs (DDoS, PortScan, Web Attacks).
+   - Currently, there is zero ML code or trained models utilizing these datasets.
+
+4. Single-Node SQLite Storage:
+   - Suitable for local execution, but concurrent write locks and query latency will degrade under high throughput (>1000 logs/sec).
+
+5. No Threat Intelligence (CTI) Enrichment:
+   - External attacker IPs are not enriched against live threat feeds (AbuseIPDB, VirusTotal, AlienVault OTX).
+
+
+================================================================================
+5. DEVELOPMENT ROADMAP: WHAT NEEDS TO BE DEVELOPED
+================================================================================
+
+Phase A: Live Ingestion & Streaming
+- Implement Syslog UDP listener (RFC 5424) on port 514.
+- Create REST log push API endpoint (POST /api/logs/ingest).
+- Add background worker queue for non-blocking asynchronous processing.
+
+Phase B: Active Response & SOAR (Human-in-the-Loop)
+- Executable containment scripts:
+  * Perimeter IP block (Windows Firewall / iptables script generation).
+  * Host network isolation command.
+  * Account lockout and session revocation.
+- Streamlit dashboard approval modal for one-click action execution.
+
+Phase C: Machine Learning Intrusion Detection (CIC-IDS2017)
+- Preprocessing and feature engineering pipeline for MachineLearningCSV/.
+- Train an ensemble model (XGBoost / LightGBM or Isolation Forest).
+- Combine ML anomaly scores with rule-based correlation to detect zero-day or abnormal network traffic.
+
+Phase D: Automated Threat Intelligence (CTI) Feed
+- Live reputation lookups for external IPs and file hashes via AbuseIPDB and VirusTotal APIs.
+- Local SQLite caching with a 24-hour TTL to respect API rate limits.
+
+Phase E: Interactive Visualizations
+- Interactive attack kill-chain graphs (Attacker IP -> Brute Force -> Host -> Process -> Target Account).
+- Live real-time WebSocket feed for incoming alerts.
+
+
+================================================================================
+6. DEVELOPMENT IDEAS, DETAILED EXPLANATIONS & PRACTICAL TIPS
+================================================================================
+
+Idea 1: Live Real-Time Ingestion (Syslog + HTTP Push)
+- Explanation: Replace static file imports with live log streaming. Forwarders (NXLog, Winlogbeat, rsyslog) stream logs continuously to AI-SOC.
+- Tip: Use asyncio.DatagramProtocol in FastAPI to process UDP Syslog packets efficiently without blocking main API threads.
+
+Idea 2: Actionable Containment / SOAR Playbooks (One-Click Response)
+- Explanation: Turn the AI remediation checklist into real system commands.
+  * Windows Firewall: netsh advfirewall firewall add rule name="Block-Attacker" dir=in action=block remoteip=<IP>
+  * Process Kill: taskkill /PID <PID> /F
+  * Account Lockout: Disable-LocalUser -Name <Username>
+- Tip: Keep active containment behind an explicit UI confirmation prompt with confirmation checkboxes to prevent accidental disruption of critical services.
+
+Idea 3: Network ML Anomaly Detection (Utilizing MachineLearningCSV/)
+- Explanation: Train models on the network flow features (Flow Duration, Total Fwd Packets, Flow Bytes/s).
+- Tip: Never use ML alone for alert triggering. Use the ML anomaly score as an enrichment multiplier for correlation rules to prevent false positive fatigue.
+
+Idea 4: Automated Threat Intelligence (CTI) Lookups
+- Explanation: Enrich IP addresses against free OSINT sources to surface geolocation, ISP, and abuse confidence scores.
+- Tip: Cache results locally in SQLite so repeated queries for the same attacker IP do not exceed third-party API limits.
+
+Idea 5: Interactive Attack Graph & Kill Chain Visualization
+- Explanation: Render an interactive network/process graph using streamlit-agraph or vis.js to show lateral movement and parent-child execution paths visually.
+- Tip: Analysts process visual node graphs 10x faster than reading through hundreds of raw event rows in a table.

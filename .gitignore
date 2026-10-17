@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# Database files
+*.sqlite3
+*.db
+
+# Large Datasets (Splunk BOTS v1, CICIDS, raw CSVs)
+botsv1.WinEventLog_Security.csv/
+MachineLearningCSV/
+*.csv
+
+# Test caches & temporary artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment variables
+.env
+
+# IDEs & System
+.vscode/
+.idea/
+.DS_Store
