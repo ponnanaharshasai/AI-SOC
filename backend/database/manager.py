@@ -63,6 +63,11 @@ class DatabaseManager:
                         dedup_signature TEXT
                     )
                 ''')
+                # Migrate existing table if dedup_signature column doesn't exist
+                det_cols = [c[1] for c in cursor.execute('PRAGMA table_info(detections)').fetchall()]
+                if 'dedup_signature' not in det_cols:
+                    cursor.execute('ALTER TABLE detections ADD COLUMN dedup_signature TEXT')
+
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_det_timestamp ON detections(timestamp)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_det_severity ON detections(severity)')
                 cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_det_dedup ON detections(dedup_signature)')
@@ -85,6 +90,22 @@ class DatabaseManager:
                 ''')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_inc_status ON incidents(status)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_inc_created_at ON incidents(created_at)')
+
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS soar_actions (
+                        action_id TEXT PRIMARY KEY,
+                        incident_id TEXT,
+                        action_type TEXT NOT NULL,
+                        target TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        reason TEXT,
+                        executed_at TEXT NOT NULL,
+                        rolled_back_at TEXT
+                    )
+                ''')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_soar_status ON soar_actions(status)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_soar_type ON soar_actions(action_type)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_soar_target ON soar_actions(target)')
                 conn.commit()
                 logger.info("Database initialized successfully.")
         except Exception as e:
@@ -344,4 +365,101 @@ class DatabaseManager:
                 return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"Failed to update incident {incident_id}: {e}")
+            return False
+
+    def batch_save_events(self, events: List[NormalizedEvent]) -> int:
+        """Batch save multiple normalized events in a single transaction for high performance."""
+        if not events:
+            return 0
+        try:
+            with closing(self.get_connection()) as conn:
+                cursor = conn.cursor()
+                rows = []
+                for event in events:
+                    rows.append((
+                        event.event_id,
+                        event.timestamp.isoformat() if hasattr(event.timestamp, "isoformat") else str(event.timestamp),
+                        event.source,
+                        str(event.source_ip) if event.source_ip else None,
+                        str(event.destination_ip) if event.destination_ip else None,
+                        event.source_port,
+                        event.destination_port,
+                        event.username,
+                        event.event_type.value if hasattr(event.event_type, "value") else str(event.event_type),
+                        event.action,
+                        event.status,
+                        event.severity,
+                        event.message
+                    ))
+                cursor.executemany('''
+                    INSERT OR IGNORE INTO normalized_events (
+                        event_id, timestamp, source, source_ip, destination_ip,
+                        source_port, destination_port, username, event_type,
+                        action, status, severity, message
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', rows)
+                conn.commit()
+                return cursor.rowcount
+        except Exception as e:
+            logger.error(f"Failed to batch save events: {e}")
+            return 0
+
+    def save_soar_action(self, action: Dict[str, Any]) -> bool:
+        """Save an automated or manual SOAR containment action."""
+        try:
+            with closing(self.get_connection()) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT OR REPLACE INTO soar_actions (
+                        action_id, incident_id, action_type, target,
+                        status, reason, executed_at, rolled_back_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    action.get("action_id"),
+                    action.get("incident_id"),
+                    action.get("action_type"),
+                    action.get("target"),
+                    action.get("status", "ACTIVE"),
+                    action.get("reason"),
+                    action.get("executed_at", datetime.now().isoformat()),
+                    action.get("rolled_back_at")
+                ))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Failed to save SOAR action: {e}")
+            return False
+
+    def get_soar_actions(self, status: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """Retrieve recorded SOAR containment actions."""
+        try:
+            with closing(self.get_connection()) as conn:
+                cursor = conn.cursor()
+                query = "SELECT * FROM soar_actions"
+                params = []
+                if status:
+                    query += " WHERE status = ?"
+                    params.append(status)
+                query += " ORDER BY executed_at DESC LIMIT ?"
+                params.append(limit)
+                cursor.execute(query, params)
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Failed to retrieve SOAR actions: {e}")
+            return []
+
+    def rollback_soar_action(self, action_id: str) -> bool:
+        """Roll back an active SOAR containment action."""
+        try:
+            with closing(self.get_connection()) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE soar_actions
+                    SET status = 'ROLLED_BACK', rolled_back_at = ?
+                    WHERE action_id = ?
+                ''', (datetime.now().isoformat(), action_id))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Failed to rollback SOAR action {action_id}: {e}")
             return False

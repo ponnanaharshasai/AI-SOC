@@ -1,6 +1,6 @@
 import logging
 import httpx
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 from backend.config import settings
 from backend.database.manager import DatabaseManager
@@ -97,10 +97,31 @@ DEFAULT_REMEDIATION_PLAYBOOK = {
 
 
 class AIAssistant:
+    _ollama_available: Optional[bool] = None
+    _last_ollama_check: float = 0.0
+
     def __init__(self, db_manager: DatabaseManager):
         self.db = db_manager
         self.ollama_url = f"{settings.ollama_host.rstrip('/')}/api/generate"
         self.model = settings.ai_model_name
+
+    def is_ollama_available(self) -> bool:
+        import time
+        now = time.time()
+        if AIAssistant._ollama_available is not None and (now - AIAssistant._last_ollama_check) < 30.0:
+            return AIAssistant._ollama_available
+        try:
+            with httpx.Client(timeout=1.0) as client:
+                resp = client.get(f"{settings.ollama_host.rstrip('/')}/api/tags")
+                if resp.status_code == 200:
+                    models = [m.get("name", "") for m in resp.json().get("models", [])]
+                    AIAssistant._ollama_available = any(self.model in m for m in models)
+                else:
+                    AIAssistant._ollama_available = False
+        except Exception:
+            AIAssistant._ollama_available = False
+        AIAssistant._last_ollama_check = now
+        return AIAssistant._ollama_available
 
     def analyze_incident(self, incident_id: str) -> AIAnalysisResult:
         """Run AI-assisted analysis for the specified incident."""
@@ -177,6 +198,9 @@ class AIAssistant:
 
     def _query_ollama(self, incident: dict, detections: list, events: list) -> str:
         """Query local Ollama instance if available, otherwise return empty string."""
+        if not self.is_ollama_available():
+            return ""
+
         prompt = build_incident_analysis_prompt(incident, detections, events)
         payload = {
             "model": self.model,
@@ -192,7 +216,7 @@ class AIAssistant:
                     data = resp.json()
                     return data.get("response", "").strip()
         except Exception as e:
-            logger.info(f"Ollama local service not reachable at {self.ollama_url} ({e}). Using deterministic expert response.")
+            logger.info(f"Ollama local service query failed ({e}). Using deterministic expert response.")
         return ""
 
     def _build_executive_summary(self, incident: dict, detections: list, ai_text: str) -> str:

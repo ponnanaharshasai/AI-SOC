@@ -10,6 +10,9 @@ from backend.detection.engine import DetectionEngine
 from backend.incidents.models import IncidentUpdate
 from backend.incidents.engine import IncidentEngine
 from backend.ai.assistant import AIAssistant
+from backend.soar.engine import SOAREngine
+from backend.soar.models import SOARExecutionRequest
+from backend.autonomous.engine import AutonomousSOCEngine
 import os
 import logging
 from typing import Optional
@@ -232,3 +235,86 @@ def analyze_incident_with_ai(incident_id: str):
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI analysis failed: {str(e)}")
+
+
+# --- Phase 8: Autonomous AI-SOC & SOAR Endpoints ---
+
+@app.post("/api/autonomous/run")
+def run_autonomous_soc(
+    ingest_sample: bool = Query(False, description="Whether to ingest sample scenario logs if needed"),
+    filename: str = Query("botsv1_attack_scenario.jsonl", description="Scenario filename to ingest"),
+    window: int = Query(600, description="Correlation window in seconds")
+):
+    """Run an end-to-end Autonomous AI-SOC cycle: Ingest -> Correlate -> Detect -> Cluster -> AI Investigate -> SOAR Contain."""
+    engine = AutonomousSOCEngine(db_manager)
+    summary = engine.run_full_autonomous_cycle(
+        ingest_sample=ingest_sample,
+        filename=filename,
+        window_seconds=window
+    )
+    return {
+        "status": "success",
+        "summary": summary.model_dump(mode="json")
+    }
+
+
+@app.get("/api/autonomous/status")
+def get_autonomous_status():
+    """Get operational status, active incidents, and active containments."""
+    engine = AutonomousSOCEngine(db_manager)
+    status = engine.get_status()
+    return {
+        "status": "success",
+        "details": status.model_dump(mode="json")
+    }
+
+
+@app.get("/api/soar/actions")
+def get_soar_actions(status: Optional[str] = Query(None, description="Filter by status (ACTIVE, ROLLED_BACK)")):
+    """Retrieve all automated and manual SOAR containment actions."""
+    actions = db_manager.get_soar_actions(status=status)
+    return {
+        "status": "success",
+        "count": len(actions),
+        "actions": actions
+    }
+
+
+@app.post("/api/soar/execute")
+def execute_soar_action(request: SOARExecutionRequest):
+    """Manually trigger a SOAR containment action (Firewall block, account lockout, endpoint isolation)."""
+    engine = SOAREngine(db_manager)
+    action = engine.execute_manual_action(
+        action_type=request.action_type.value,
+        target=request.target,
+        reason=request.reason,
+        incident_id=request.incident_id
+    )
+    return {
+        "status": "success",
+        "action": action.model_dump(mode="json")
+    }
+
+
+@app.post("/api/soar/actions/{action_id}/rollback")
+def rollback_soar_action(action_id: str):
+    """Roll back / unblock an active SOAR containment action."""
+    engine = SOAREngine(db_manager)
+    success = engine.rollback_action(action_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Action not found or already rolled back")
+    return {
+        "status": "success",
+        "message": f"Containment action {action_id} successfully rolled back."
+    }
+
+
+@app.get("/api/reports/master")
+def get_master_soc_report():
+    """Generate an all-in-one comprehensive Master SOC Audit Report in Markdown."""
+    engine = AutonomousSOCEngine(db_manager)
+    report_md = engine.generate_master_soc_report()
+    return {
+        "status": "success",
+        "report_markdown": report_md
+    }

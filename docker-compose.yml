@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  ai-soc:
+    build: .
+    container_name: ai-soc-app
+    ports:
+      - "8000:8000"  # FastAPI REST API
+      - "8501:8501"  # Streamlit SOC Dashboard
+    environment:
+      - PROJECT_NAME=AI-SOC
+      - SQLITE_DB_PATH=sqlite:///./soc_data.db
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - AI_MODEL_NAME=qwen2.5:7b
+      - CORRELATION_WINDOW_SECONDS=600
+    volumes:
+      - ./soc_data.db:/app/soc_data.db
+      - ./sample_logs:/app/sample_logs
+    restart: unless-stopped
