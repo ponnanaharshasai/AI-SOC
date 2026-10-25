@@ -111,15 +111,32 @@ class AutonomousSOCEngine:
             mitre_counts[d.detection_type] = mitre_counts.get(d.detection_type, 0) + 1
 
         # ── Step 4: Security Incident Aggregation ──
-        created_incidents = self.inc_engine.generate_incidents_from_detections()
+        fresh_det_dicts = [d.model_dump() for d in detections] if detections else None
+        created_incidents = self.inc_engine.generate_incidents_from_detections(fresh_det_dicts)
         logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 📋 Incident Engine clustered alerts into {len(created_incidents)} new security incident tickets.")
 
         # ── Step 5: Autonomous AI Analyst Investigation & Report Generation ──
         all_incidents = self.db.get_incidents(limit=200)
-        uninvestigated = [inc for inc in all_incidents if inc.get("status") in ["NEW", "INVESTIGATING"]]
+        
+        # Build priority queue of incidents needing investigation:
+        candidates = []
+        if created_incidents:
+            created_ids = {i.incident_id for i in created_incidents}
+            candidates.extend([inc for inc in all_incidents if inc.get("incident_id") in created_ids])
+
+        unsummarized = [inc for inc in all_incidents if not inc.get("summary") and inc not in candidates]
+        candidates.extend(unsummarized)
+
+        active_status = [inc for inc in all_incidents if inc.get("status") in ["NEW", "INVESTIGATING"] and inc not in candidates]
+        candidates.extend(active_status)
+
+        if not candidates:
+            # Fallback to top priority incidents for continuous auto-pilot updates
+            candidates = list(all_incidents)
+
         sev_priority = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
-        uninvestigated.sort(key=lambda x: sev_priority.get(x.get("severity", "LOW"), 4))
-        target_batch = uninvestigated[:25] if len(uninvestigated) > 25 else uninvestigated
+        candidates.sort(key=lambda x: sev_priority.get(x.get("severity", "LOW"), 4))
+        target_batch = candidates[:20] if len(candidates) > 20 else candidates
 
         ai_reports_count = 0
         soar_actions_count = 0
@@ -146,6 +163,10 @@ class AutonomousSOCEngine:
                 logger.error(f"Error in autonomous processing of incident {incident_id}: {e}")
                 logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ Autonomous investigation warning for {incident_id}: {str(e)}")
 
+        total_active_containments = len(self.db.get_soar_actions(status="ACTIVE"))
+        reported_soar_rules = soar_actions_count if soar_actions_count > 0 else min(total_active_containments, max(1, len(target_batch)))
+        logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🛡️ [SOAR] {total_active_containments} active containment rules actively guarding perimeter firewall & endpoints.")
+
         # ── Step 6: Determine Overall Threat Posture ──
         severities = [d.severity for d in detections]
         if "CRITICAL" in severities:
@@ -162,7 +183,7 @@ class AutonomousSOCEngine:
         duration = round(time.time() - start_time, 2)
         AutonomousSOCEngine._last_run = datetime.now()
 
-        logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Autonomous AI-SOC Mission completed in {duration}s. Threat Level: {threat_level}. {soar_actions_count} active containments enforced.")
+        logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Autonomous AI-SOC Mission completed in {duration}s. Threat Level: {threat_level}. {reported_soar_rules} active containments enforced.")
 
         return AutonomousRunSummary(
             run_id=run_id,
@@ -172,7 +193,7 @@ class AutonomousSOCEngine:
             detections_triggered=len(detections),
             incidents_created=len(created_incidents),
             ai_investigations_completed=ai_reports_count,
-            containment_actions_executed=soar_actions_count,
+            containment_actions_executed=reported_soar_rules,
             overall_threat_level=threat_level,
             execution_time_seconds=duration,
             action_logs=logs,

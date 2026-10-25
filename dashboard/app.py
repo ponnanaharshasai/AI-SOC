@@ -343,11 +343,13 @@ with st.sidebar:
     if st.button("📥  INGEST & NORMALIZE LOGS", use_container_width=True, disabled=not backend_online):
         with st.spinner("Ingesting telemetry..."):
             try:
-                with httpx.Client(timeout=10.0) as client:
+                with httpx.Client(timeout=20.0) as client:
                     res = client.post(f"{api_url}/api/logs/collect?filename={dataset_choice}")
                     if res.status_code == 200:
                         data = res.json()
-                        st.toast(f"✅ Ingested {data['stored']} events successfully!", icon="📥")
+                        st.session_state["sidebar_feedback"] = f"✅ Ingested {data.get('stored', 0)} events successfully into database!"
+                        st.toast(f"✅ Ingested {data.get('stored', 0)} events!", icon="📥")
+                        st.rerun()
                     else:
                         st.error(f"Error: {res.text}")
             except Exception as e:
@@ -356,11 +358,13 @@ with st.sidebar:
     if st.button("🔍  RUN THREAT DETECTION", use_container_width=True, disabled=not backend_online):
         with st.spinner("Correlating events & evaluating detection rules..."):
             try:
-                with httpx.Client(timeout=15.0) as client:
+                with httpx.Client(timeout=25.0) as client:
                     res = client.post(f"{api_url}/api/detection/run?window=600")
                     if res.status_code == 200:
                         data = res.json()
-                        st.toast(f"🛡️ Found {data['detections_found']} threat detections!", icon="🔍")
+                        st.session_state["sidebar_feedback"] = f"🛡️ Evaluated correlations & triggered {data.get('detections_found', 0)} threat detections!"
+                        st.toast(f"🛡️ Found {data.get('detections_found', 0)} threat detections!", icon="🔍")
+                        st.rerun()
                     else:
                         st.error(f"Error: {res.text}")
             except Exception as e:
@@ -369,15 +373,20 @@ with st.sidebar:
     if st.button("🚨  GENERATE SECURITY INCIDENTS", use_container_width=True, disabled=not backend_online):
         with st.spinner("Aggregating alerts into Incident tickets..."):
             try:
-                with httpx.Client(timeout=10.0) as client:
+                with httpx.Client(timeout=20.0) as client:
                     res = client.post(f"{api_url}/api/incidents/generate")
                     if res.status_code == 200:
                         data = res.json()
-                        st.toast(f"🚨 Created {data['incidents_created']} new incidents!", icon="🚨")
+                        st.session_state["sidebar_feedback"] = f"🚨 Clustered detections into {data.get('incidents_created', 0)} new incidents!"
+                        st.toast(f"🚨 Created {data.get('incidents_created', 0)} new incidents!", icon="🚨")
+                        st.rerun()
                     else:
                         st.error(f"Error: {res.text}")
             except Exception as e:
                 st.error(f"Connection failed: {e}")
+
+    if "sidebar_feedback" in st.session_state:
+        st.info(st.session_state["sidebar_feedback"])
 
     st.markdown("---")
     st.markdown("""
@@ -824,17 +833,60 @@ with tab_incidents:
     </div>
     """, unsafe_allow_html=True)
 
-    incidents = (fetch_api("/api/incidents?limit=100") or {}).get("incidents", [])
+    incidents = (fetch_api("/api/incidents?limit=250") or {}).get("incidents", [])
 
     if not incidents:
         st.warning("No incidents available for analysis. Please run Steps 1, 2, and 3 from the sidebar.")
     else:
-        # Incident Selector
-        incident_options = {
-            f"[{inc.get('severity')}] {inc.get('title')} ({inc.get('status')}) - ID: {inc.get('incident_id')[:8]}...": inc.get("incident_id")
-            for inc in incidents
-        }
-        selected_label = st.selectbox("Select Incident to Investigate", options=list(incident_options.keys()))
+        # Triage Status Metrics Bar
+        tot_inc = len(incidents)
+        red_inc = sum(1 for i in incidents if (i.get("status") or "NEW").upper() in ["NEW", "OPEN", "UNASSIGNED"])
+        yel_inc = sum(1 for i in incidents if (i.get("status") or "").upper() in ["INVESTIGATING", "IN_PROGRESS"])
+        grn_inc = sum(1 for i in incidents if (i.get("status") or "").upper() in ["CONTAINED", "CLOSED", "RESOLVED"])
+
+        st.markdown(f"""
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; text-align: center;">
+            <div style="background: #111827; border: 1px solid #1e3a5f; padding: 12px; border-radius: 8px;">
+                <div style="color: #94a3b8; font-size: 0.75rem;">Total Incidents</div>
+                <div style="color: #00d4ff; font-family: 'JetBrains Mono'; font-size: 1.4rem; font-weight: 800;">{tot_inc}</div>
+            </div>
+            <div style="background: #111827; border: 1px solid rgba(239, 68, 68, 0.4); padding: 12px; border-radius: 8px;">
+                <div style="color: #f87171; font-size: 0.75rem;">🔴 Pending Triage (New)</div>
+                <div style="color: #ef4444; font-family: 'JetBrains Mono'; font-size: 1.4rem; font-weight: 800;">{red_inc}</div>
+            </div>
+            <div style="background: #111827; border: 1px solid rgba(234, 179, 8, 0.4); padding: 12px; border-radius: 8px;">
+                <div style="color: #fde047; font-size: 0.75rem;">🟡 In Investigation</div>
+                <div style="color: #eab308; font-family: 'JetBrains Mono'; font-size: 1.4rem; font-weight: 800;">{yel_inc}</div>
+            </div>
+            <div style="background: #111827; border: 1px solid rgba(16, 185, 129, 0.4); padding: 12px; border-radius: 8px;">
+                <div style="color: #86efac; font-size: 0.75rem;">🟢 Updated / Contained</div>
+                <div style="color: #10b981; font-family: 'JetBrains Mono'; font-size: 1.4rem; font-weight: 800;">{grn_inc}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if "last_incident_update" in st.session_state:
+            up = st.session_state["last_incident_update"]
+            st.success(f"📋 **Incident Status Updated:** `{up['id'][:8]}` ('{up['title']}') transitioned from **{up['prev']}** ➔ **{up['new']}** (Assigned Analyst: `{up['analyst']}`) at {up['time']}.")
+
+        # Incident Selector with Color-Coded Status Dots
+        incident_options = {}
+        for inc in incidents:
+            st_val = (inc.get("status") or "NEW").upper()
+            if st_val in ["CONTAINED", "CLOSED", "RESOLVED"]:
+                dot = "🟢"
+            elif st_val in ["INVESTIGATING", "IN_PROGRESS"]:
+                dot = "🟡"
+            else:
+                dot = "🔴"
+            has_ai_badge = " [AI Analyzed]" if inc.get("summary") else ""
+            label = f"{dot} [{inc.get('severity')}] {inc.get('title')} ({st_val}){has_ai_badge} - ID: {inc.get('incident_id')[:8]}..."
+            incident_options[label] = inc.get("incident_id")
+
+        selected_label = st.selectbox(
+            "Select Incident to Investigate (🔴 Red = Not Updated / New | 🟡 Yellow = Investigating | 🟢 Green = Updated / Contained)",
+            options=list(incident_options.keys())
+        )
         selected_id = incident_options[selected_label]
 
         # Fetch detailed incident data
@@ -940,15 +992,23 @@ with tab_incidents:
 
                 analyst_notes = st.text_area("Analyst Investigation Notes", value=inc.get("remediation_notes") or "")
 
-                if st.form_submit_button("Update Incident Status"):
-                    with httpx.Client(timeout=5.0) as client:
+                if st.form_submit_button("Update Incident Status", type="primary"):
+                    with httpx.Client(timeout=8.0) as client:
                         p_res = client.patch(f"{api_url}/api/incidents/{selected_id}", json={
                             "status": new_status,
                             "assigned_to": new_assignee or None,
                             "remediation_notes": analyst_notes
                         })
                         if p_res.status_code == 200:
-                            st.success("Incident updated successfully!")
+                            st.session_state["last_incident_update"] = {
+                                "id": selected_id,
+                                "title": inc.get("title", "Security Incident"),
+                                "prev": inc.get("status", "NEW"),
+                                "new": new_status,
+                                "analyst": new_assignee or "SOC Analyst",
+                                "time": datetime.now().strftime("%H:%M:%S")
+                            }
+                            st.toast(f"✅ Incident {selected_id[:8]} updated to {new_status}!", icon="🟢")
                             st.rerun()
                         else:
                             st.error(f"Update failed: {p_res.text}")
@@ -1002,27 +1062,40 @@ with tab_soar:
     if active_soar:
         for act in active_soar:
             action_id = act.get("action_id")
-            act_col1, act_col2, act_col3, act_col4 = st.columns([1.5, 2, 4, 1.5])
+            act_col1, act_col2, act_col3, act_col4 = st.columns([1.8, 2, 3.7, 1.8])
             with act_col1:
-                st.markdown(f"**`{act.get('action_type')}`**")
+                st.markdown(f"**`{act.get('action_type')}`**<br/><span style='color:#ef4444; font-size:0.75rem; font-weight:700;'>🔒 LOCKED & ENFORCED</span>", unsafe_allow_html=True)
             with act_col2:
                 st.markdown(f"Target: `{act.get('target')}`")
             with act_col3:
                 st.markdown(f"<span style='color:#94a3b8; font-size:0.85rem;'>{act.get('reason')}</span>", unsafe_allow_html=True)
             with act_col4:
-                if st.button("🔓 Rollback", key=f"rb_{action_id}", use_container_width=True):
+                if st.button("🔓 Unlock / Rollback", key=f"rb_{action_id}", use_container_width=True):
                     rb_res = post_api(f"/api/soar/actions/{action_id}/rollback")
                     if rb_res:
-                        st.success(f"Rolled back {action_id}")
+                        st.session_state["last_soar_rollback"] = {
+                            "action_id": action_id,
+                            "target": act.get("target"),
+                            "type": act.get("action_type")
+                        }
+                        st.toast(f"🔓 Target {act.get('target')} successfully UNLOCKED!", icon="🔓")
                         st.rerun()
     else:
         st.info("No active containment actions currently enforced. System perimeter is normal.")
+
+    if "last_soar_rollback" in st.session_state:
+        lr = st.session_state["last_soar_rollback"]
+        st.success(f"🔓 **Containment Reversal Confirmed:** Target `{lr['target']}` ({lr['type']}) has been **UNLOCKED** and perimeter policy restored.")
 
     if history_soar:
         st.markdown("<br/>", unsafe_allow_html=True)
         st.markdown(f'<div class="section-header">⚪ Containment History & Audit Log ({len(history_soar)})</div>', unsafe_allow_html=True)
         df_hist = pd.DataFrame(history_soar)
-        cols_to_show = [c for c in ["action_id", "action_type", "target", "status", "reason", "executed_at", "rolled_back_at"] if c in df_hist.columns]
+        if "status" in df_hist.columns:
+            df_hist["Lock Status"] = df_hist["status"].apply(
+                lambda s: "🔓 UNLOCKED (Rolled Back)" if s == "ROLLED_BACK" else "🔒 LOCKED (Active Enforcement)"
+            )
+        cols_to_show = [c for c in ["action_id", "action_type", "target", "Lock Status", "reason", "executed_at", "rolled_back_at"] if c in df_hist.columns]
         st.dataframe(df_hist[cols_to_show], use_container_width=True)
 
 
