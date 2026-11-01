@@ -1,3 +1,11 @@
+import sys
+import os
+
+# Ensure repository root is in sys.path (critical for Streamlit Cloud where script path is dashboard/app.py)
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 import streamlit as st
 import httpx
 import pandas as pd
@@ -19,33 +27,60 @@ st.set_page_config(
 import threading
 import time
 
+_backend_thread = None
+
 def ensure_backend_alive():
     """Ensure FastAPI backend is running; starts in background thread if running in Streamlit Cloud."""
+    global _backend_thread
     try:
-        with httpx.Client(timeout=0.8) as client:
+        with httpx.Client(timeout=1.0) as client:
             if client.get("http://127.0.0.1:8000/health").status_code == 200:
-                return
+                return True
     except Exception:
         pass
+
+    if _backend_thread is not None and _backend_thread.is_alive():
+        for _ in range(12):
+            time.sleep(0.5)
+            try:
+                with httpx.Client(timeout=0.5) as client:
+                    if client.get("http://127.0.0.1:8000/health").status_code == 200:
+                        return True
+            except Exception:
+                pass
+        return False
 
     try:
         import uvicorn
         from backend.main import app as fastapi_app
         def run_srv():
-            uvicorn.run(fastapi_app, host="127.0.0.1", port=8000, log_level="warning")
-        t = threading.Thread(target=run_srv, daemon=True)
-        t.start()
-        # Poll until backend is ready (up to 12s for cloud cold-start)
-        for _ in range(24):
+            config = uvicorn.Config(
+                fastapi_app,
+                host="127.0.0.1",
+                port=8000,
+                log_level="warning",
+                access_log=False
+            )
+            config.install_signal_handlers = False
+            server = uvicorn.Server(config)
+            server.run()
+
+        _backend_thread = threading.Thread(target=run_srv, daemon=True, name="fastapi-backend-thread")
+        _backend_thread.start()
+
+        # Poll until backend is ready (up to 15s for cloud cold-start)
+        for _ in range(30):
             time.sleep(0.5)
             try:
                 with httpx.Client(timeout=0.5) as c2:
                     if c2.get("http://127.0.0.1:8000/health").status_code == 200:
-                        break
+                        return True
             except Exception:
                 pass
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Cloud bootstrapper exception: {e}")
+    return False
 
 ensure_backend_alive()
 
@@ -329,7 +364,11 @@ with st.sidebar:
         st.markdown('<div style="color: #10b981; font-weight: 600; font-size: 0.85rem;"><span class="live-dot"></span> SYSTEM ONLINE — API Active</div>', unsafe_allow_html=True)
     else:
         st.error("● SYSTEM OFFLINE — Backend Unreachable")
-        st.caption("Start: `uvicorn backend.main:app --reload`")
+        if st.button("🚀 Boot Background Backend", use_container_width=True):
+            with st.spinner("Starting internal FastAPI engine..."):
+                ensure_backend_alive()
+                st.rerun()
+        st.caption("Locally: `uvicorn backend.main:app --reload`")
 
     st.markdown("---")
     st.markdown('<div style="color: #94a3b8; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 10px;">⚡ SOC WORKFLOW ENGINE</div>', unsafe_allow_html=True)
