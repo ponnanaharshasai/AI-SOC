@@ -188,11 +188,16 @@ class AIAssistant:
             timestamp=datetime.now()
         )
 
-        # Update incident record with AI summary and notes
-        self.db.update_incident(incident_id, {
+        # Update incident record with AI summary, notes, and transition status to INVESTIGATING if currently NEW/unassigned
+        update_dict = {
             "summary": summary,
             "remediation_notes": "\n".join(f"- {s}" for s in remediation_steps)
-        })
+        }
+        current_st = (incident.get("status") or "NEW").upper()
+        if current_st in ["NEW", "OPEN", "UNASSIGNED"]:
+            update_dict["status"] = "INVESTIGATING"
+
+        self.db.update_incident(incident_id, update_dict)
 
         return result
 

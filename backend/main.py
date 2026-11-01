@@ -26,11 +26,21 @@ async def lifespan(app: FastAPI):
     db_manager.initialize_database()
     yield
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title=settings.project_name,
     description="Lightweight AI-SOC Backend API (Deterministic Detection + Single AI Analyst)",
     version="0.1.0",
     lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 @app.get("/")
@@ -87,8 +97,24 @@ def process_sample_logs(filename: str = "events.jsonl"):
         "failed": failed
     }
 
+@app.get("/api/stats")
+def get_system_stats():
+    """Retrieve full system-wide aggregate telemetry, detection, and incident statistics."""
+    return {
+        "status": "success",
+        "stats": db_manager.get_system_stats()
+    }
+
+@app.get("/api/incidents/stats")
+def get_incident_stats():
+    """Retrieve real-time incident status and triage counters."""
+    return {
+        "status": "success",
+        "stats": db_manager.get_incident_stats()
+    }
+
 @app.get("/api/events")
-def get_events(limit: int = 100):
+def get_events(limit: int = Query(100, ge=1, le=5000)):
     events = db_manager.get_recent_events(limit=limit)
     return {"status": "success", "count": len(events), "events": events}
 
@@ -139,7 +165,7 @@ def run_detection(window: Optional[int] = Query(None, description="Correlation t
     }
 
 @app.get("/api/detections")
-def get_detections(limit: int = 100):
+def get_detections(limit: int = Query(100, ge=1, le=5000)):
     """Retrieve saved detection results."""
     results = db_manager.get_recent_detections(limit=limit)
     return {
@@ -165,7 +191,7 @@ def generate_incidents():
 def list_incidents(
     status: Optional[str] = Query(None, description="Filter by incident status (NEW, INVESTIGATING, CONTAINED, CLOSED)"),
     severity: Optional[str] = Query(None, description="Filter by severity (LOW, MEDIUM, HIGH, CRITICAL)"),
-    limit: int = Query(100, ge=1, le=500)
+    limit: int = Query(250, ge=1, le=5000)
 ):
     """List all incidents with optional filtering."""
     incidents = db_manager.get_incidents(status=status, severity=severity, limit=limit)

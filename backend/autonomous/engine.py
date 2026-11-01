@@ -32,9 +32,9 @@ class AutonomousSOCEngine:
 
     def get_status(self) -> AutonomousStatus:
         """Return the real-time operational status of the Autonomous SOC."""
-        all_incidents = self.db.get_incidents(limit=500)
-        active_inc = sum(1 for i in all_incidents if i.get("status") in ["NEW", "INVESTIGATING"])
-        contained_inc = sum(1 for i in all_incidents if i.get("status") in ["CONTAINED", "CLOSED"])
+        inc_stats = self.db.get_incident_stats()
+        active_inc = inc_stats.get("new", 0) + inc_stats.get("investigating", 0)
+        contained_inc = inc_stats.get("contained", 0)
         active_containments = len(self.db.get_soar_actions(status="ACTIVE"))
 
         return AutonomousStatus(
@@ -202,10 +202,16 @@ class AutonomousSOCEngine:
 
     def generate_master_soc_report(self) -> str:
         """Compile a single unified audit-grade Master SOC Forensic Report across all incidents and actions."""
-        incidents = self.db.get_incidents(limit=100)
-        actions = self.db.get_soar_actions(limit=100)
+        sys_stats = self.db.get_system_stats()
+        incidents = self.db.get_incidents(limit=250)
+        actions = self.db.get_soar_actions(limit=250)
         detections = self.db.get_recent_detections(limit=500)
         events = self.db.get_recent_events(limit=100)
+
+        tot_events = sys_stats.get("total_events", len(events))
+        tot_dets = sys_stats.get("total_detections", len(detections))
+        tot_incs = sys_stats.get("total_incidents", len(incidents))
+        tot_soar = sys_stats.get("active_containments", len(actions))
 
         report = f"""# 🛡️ AI-SOC Master Security & Incident Audit Report
 
@@ -218,10 +224,10 @@ class AutonomousSOCEngine:
 
 ## 1. Executive Operations Summary
 
-- **Total Ingested Telemetry Events:** `{len(events)} events (sampled)`
-- **Total Threat Detections Triggered:** `{len(detections)} alerts`
-- **Total Security Incidents Clustered:** `{len(incidents)} incidents`
-- **Active SOAR Containment Actions Enforced:** `{len(actions)} containment rules`
+- **Total Ingested Telemetry Events:** `{tot_events:,} events`
+- **Total Threat Detections Triggered:** `{tot_dets:,} alerts`
+- **Total Security Incidents Clustered:** `{tot_incs:,} incidents`
+- **Active SOAR Containment Actions Enforced:** `{tot_soar:,} containment rules`
 - **Autonomous Triage & Remediation Rate:** **100%** (Zero human analyst bottleneck)
 
 ---

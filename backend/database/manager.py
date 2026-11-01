@@ -9,14 +9,21 @@ from backend.detection.models import DetectionResult
 from backend.incidents.models import Incident
 from backend.config import settings
 
+import os
 logger = logging.getLogger(__name__)
 
 class DatabaseManager:
     def __init__(self, db_path: Optional[str] = None):
         if db_path:
-            self.db_path = db_path.replace("sqlite:///", "")
+            clean_path = db_path.replace("sqlite:///", "")
         else:
-            self.db_path = settings.sqlite_db_path.replace("sqlite:///", "")
+            clean_path = settings.sqlite_db_path.replace("sqlite:///", "")
+
+        if not os.path.isabs(clean_path):
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            self.db_path = os.path.normpath(os.path.join(base_dir, clean_path.lstrip("./\\")))
+        else:
+            self.db_path = os.path.normpath(clean_path)
 
     def get_connection(self):
         conn = sqlite3.connect(self.db_path)
@@ -90,6 +97,7 @@ class DatabaseManager:
                 ''')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_inc_status ON incidents(status)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_inc_created_at ON incidents(created_at)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_inc_updated_at ON incidents(updated_at)')
 
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS soar_actions (
@@ -296,16 +304,24 @@ class DatabaseManager:
                 conditions = []
 
                 if status:
-                    conditions.append("status = ?")
-                    params.append(status.upper())
+                    st_upper = status.upper().strip()
+                    if st_upper in ["CONTAINED", "CLOSED", "RESOLVED"]:
+                        conditions.append("UPPER(status) IN ('CONTAINED', 'CLOSED', 'RESOLVED')")
+                    elif st_upper in ["INVESTIGATING", "IN_PROGRESS"]:
+                        conditions.append("UPPER(status) IN ('INVESTIGATING', 'IN_PROGRESS')")
+                    elif st_upper in ["NEW", "OPEN", "UNASSIGNED"]:
+                        conditions.append("UPPER(status) IN ('NEW', 'OPEN', 'UNASSIGNED')")
+                    else:
+                        conditions.append("UPPER(status) = ?")
+                        params.append(st_upper)
                 if severity:
-                    conditions.append("severity = ?")
-                    params.append(severity.upper())
+                    conditions.append("UPPER(severity) = ?")
+                    params.append(severity.upper().strip())
 
                 if conditions:
                     query += " WHERE " + " AND ".join(conditions)
 
-                query += " ORDER BY created_at DESC LIMIT ?"
+                query += " ORDER BY updated_at DESC, created_at DESC LIMIT ?"
                 params.append(limit)
 
                 cursor.execute(query, params)
@@ -323,6 +339,117 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Failed to retrieve incidents: {e}")
             return []
+
+    def get_all_assigned_detection_ids(self) -> set:
+        """Retrieve set of all detection IDs already assigned to an existing incident."""
+        try:
+            with closing(self.get_connection()) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT detection_ids FROM incidents WHERE detection_ids IS NOT NULL AND detection_ids != ''")
+                assigned = set()
+                for row in cursor.fetchall():
+                    try:
+                        ids = json.loads(row[0])
+                        if isinstance(ids, list):
+                            assigned.update(ids)
+                    except Exception:
+                        pass
+                return assigned
+        except Exception as e:
+            logger.error(f"Failed to get assigned detection ids: {e}")
+            return set()
+
+    def get_incident_stats(self) -> Dict[str, Any]:
+        """Return fast, complete aggregate incident metrics directly from the database."""
+        try:
+            with closing(self.get_connection()) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM incidents")
+                total = cursor.fetchone()[0] or 0
+
+                cursor.execute("SELECT UPPER(status), COUNT(*) FROM incidents GROUP BY UPPER(status)")
+                status_counts = dict(cursor.fetchall())
+
+                cursor.execute("SELECT UPPER(severity), COUNT(*) FROM incidents GROUP BY UPPER(severity)")
+                severity_counts = dict(cursor.fetchall())
+
+                new_cnt = (
+                    status_counts.get("NEW", 0)
+                    + status_counts.get("OPEN", 0)
+                    + status_counts.get("UNASSIGNED", 0)
+                    + status_counts.get(None, 0)
+                    + status_counts.get("", 0)
+                )
+                inv_cnt = (
+                    status_counts.get("INVESTIGATING", 0)
+                    + status_counts.get("IN_PROGRESS", 0)
+                )
+                cnt_cnt = (
+                    status_counts.get("CONTAINED", 0)
+                    + status_counts.get("CLOSED", 0)
+                    + status_counts.get("RESOLVED", 0)
+                )
+
+                return {
+                    "total": total,
+                    "new": new_cnt,
+                    "investigating": inv_cnt,
+                    "contained": cnt_cnt,
+                    "by_status": status_counts,
+                    "by_severity": severity_counts
+                }
+        except Exception as e:
+            logger.error(f"Failed to get incident stats: {e}")
+            return {"total": 0, "new": 0, "investigating": 0, "contained": 0, "by_status": {}, "by_severity": {}}
+
+    def get_system_stats(self) -> Dict[str, Any]:
+        """Return comprehensive system-wide metrics across telemetry, detections, and incidents."""
+        try:
+            with closing(self.get_connection()) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM normalized_events")
+                total_events = cursor.fetchone()[0] or 0
+
+                cursor.execute("SELECT COUNT(*) FROM detections")
+                total_detections = cursor.fetchone()[0] or 0
+
+                cursor.execute("SELECT UPPER(severity), COUNT(*) FROM detections GROUP BY UPPER(severity)")
+                det_severities = dict(cursor.fetchall())
+
+                cursor.execute("SELECT detection_type, COUNT(*) FROM detections GROUP BY detection_type")
+                det_types = dict(cursor.fetchall())
+
+                inc_stats = self.get_incident_stats()
+
+                cursor.execute("SELECT COUNT(*) FROM soar_actions WHERE status = 'ACTIVE'")
+                active_soar = cursor.fetchone()[0] or 0
+
+                return {
+                    "total_events": total_events,
+                    "total_detections": total_detections,
+                    "total_incidents": inc_stats["total"],
+                    "open_incidents": inc_stats["new"] + inc_stats["investigating"],
+                    "critical_alerts": det_severities.get("CRITICAL", 0),
+                    "high_alerts": det_severities.get("HIGH", 0),
+                    "active_containments": active_soar,
+                    "incident_stats": inc_stats,
+                    "detection_severities": det_severities,
+                    "detection_types": det_types
+                }
+        except Exception as e:
+            logger.error(f"Failed to get system stats: {e}")
+            return {
+                "total_events": 0,
+                "total_detections": 0,
+                "total_incidents": 0,
+                "open_incidents": 0,
+                "critical_alerts": 0,
+                "high_alerts": 0,
+                "active_containments": 0,
+                "incident_stats": {"total": 0, "new": 0, "investigating": 0, "contained": 0},
+                "detection_severities": {},
+                "detection_types": {}
+            }
 
     def get_incident(self, incident_id: str) -> Optional[Dict[str, Any]]:
         try:
@@ -354,6 +481,8 @@ class DatabaseManager:
                 for k, v in updates.items():
                     if k in ["title", "severity", "status", "assigned_to", "summary", "remediation_notes"]:
                         val = v.value if hasattr(v, "value") else v
+                        if k in ["status", "severity"] and isinstance(val, str):
+                            val = val.upper()
                         fields.append(f"{k} = ?")
                         params.append(val)
                 fields.append("updated_at = ?")
@@ -362,7 +491,10 @@ class DatabaseManager:
 
                 cursor.execute(f"UPDATE incidents SET {', '.join(fields)} WHERE incident_id = ?", params)
                 conn.commit()
-                return cursor.rowcount > 0
+                if cursor.rowcount > 0:
+                    return True
+                cursor.execute("SELECT 1 FROM incidents WHERE incident_id = ?", (incident_id,))
+                return cursor.fetchone() is not None
         except Exception as e:
             logger.error(f"Failed to update incident {incident_id}: {e}")
             return False

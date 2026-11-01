@@ -78,6 +78,30 @@ def test_incident_lifecycle():
             assert updated["assigned_to"] == "tier2_analyst"
             assert "analyzing host" in updated["remediation_notes"]
 
+            # 6. Verify stats endpoint reflects the updated status
+            stats_resp = client.get("/api/incidents/stats")
+            assert stats_resp.status_code == 200
+            stats = stats_resp.json()["stats"]
+            assert stats["total"] == 1
+            assert stats["investigating"] == 1
+            assert stats["new"] == 0
+
+            # 7. Verify filtering by status works for INVESTIGATING
+            filter_resp = client.get("/api/incidents?status=INVESTIGATING")
+            assert filter_resp.status_code == 200
+            assert filter_resp.json()["count"] == 1
+
+            # 8. Update to CONTAINED and verify stats & filter
+            patch_cnt = client.patch(f"/api/incidents/{inc_id}", json={"status": "CONTAINED"})
+            assert patch_cnt.status_code == 200
+            stats_cnt = client.get("/api/incidents/stats").json()["stats"]
+            assert stats_cnt["contained"] == 1
+            assert stats_cnt["investigating"] == 0
+
+            filter_cnt = client.get("/api/incidents?status=CONTAINED")
+            assert filter_cnt.status_code == 200
+            assert filter_cnt.json()["count"] == 1
+
     finally:
         try:
             if os.path.exists(db_name):

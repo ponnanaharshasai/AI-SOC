@@ -26,16 +26,14 @@ class IncidentEngine:
             return []
 
         # Find all detections already attached to existing incidents
-        existing_incidents = self.db.get_incidents(limit=200)
-        assigned_detection_ids = set()
-        for inc in existing_incidents:
-            for det_id in inc.get("detection_ids", []):
-                assigned_detection_ids.add(det_id)
+        assigned_detection_ids = self.db.get_all_assigned_detection_ids()
 
         # Filter for unassigned detections
-        unassigned_detections = [
-            d for d in detections if d["detection_id"] not in assigned_detection_ids
-        ]
+        unassigned_detections = []
+        for d in detections:
+            d_id = d.get("detection_id") if isinstance(d, dict) else getattr(d, "detection_id", None)
+            if d_id and d_id not in assigned_detection_ids:
+                unassigned_detections.append(d if isinstance(d, dict) else d.model_dump())
 
         if not unassigned_detections:
             return []
@@ -49,7 +47,7 @@ class IncidentEngine:
         created_incidents: List[Incident] = []
 
         for entity_key, group in groups.items():
-            detection_ids = [d["detection_id"] for d in group]
+            detection_ids = [d.get("detection_id") for d in group if d.get("detection_id")]
             detection_types = list(dict.fromkeys(d.get("detection_type", "SECURITY_ALERT") for d in group))
             
             # Determine max severity

@@ -22,7 +22,7 @@ import time
 def ensure_backend_alive():
     """Ensure FastAPI backend is running; starts in background thread if running in Streamlit Cloud."""
     try:
-        with httpx.Client(timeout=0.6) as client:
+        with httpx.Client(timeout=0.8) as client:
             if client.get("http://127.0.0.1:8000/health").status_code == 200:
                 return
     except Exception:
@@ -35,7 +35,15 @@ def ensure_backend_alive():
             uvicorn.run(fastapi_app, host="127.0.0.1", port=8000, log_level="warning")
         t = threading.Thread(target=run_srv, daemon=True)
         t.start()
-        time.sleep(1.5)
+        # Poll until backend is ready (up to 12s for cloud cold-start)
+        for _ in range(24):
+            time.sleep(0.5)
+            try:
+                with httpx.Client(timeout=0.5) as c2:
+                    if c2.get("http://127.0.0.1:8000/health").status_code == 200:
+                        break
+            except Exception:
+                pass
     except Exception:
         pass
 

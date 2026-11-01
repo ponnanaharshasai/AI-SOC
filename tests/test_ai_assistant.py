@@ -58,10 +58,11 @@ def test_ai_analysis_endpoint():
             assert len(analysis["remediation_steps"]) > 0
             assert "Investigation Report" in analysis["full_report_markdown"]
 
-            # Verify incident in DB was updated with the AI summary
+            # Verify incident in DB was updated with the AI summary and transitioned to INVESTIGATING
             inc_db = db_manager.get_incident(inc_id)
             assert inc_db["summary"] is not None
             assert len(inc_db["remediation_notes"]) > 0
+            assert inc_db["status"] == "INVESTIGATING"
 
     finally:
         try:

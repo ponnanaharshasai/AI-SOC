@@ -99,8 +99,9 @@ class SOAREngine:
                     active_targets.add(("TERMINATE_PROCESS", proc_target))
                     logger.info(f"[SOAR] Terminated malicious process: {proc_target}")
 
-        # If any actions were taken, update incident status to CONTAINED
-        if actions:
+        # If any actions were taken or are active for this incident, update incident status to CONTAINED
+        incident_has_active_soar = any(a.get("incident_id") == incident_id and a.get("status") == "ACTIVE" for a in active_actions)
+        if actions or incident_has_active_soar:
             self.db.update_incident(incident_id, {
                 "status": "CONTAINED",
                 "assigned_to": "Autonomous AI Analyst (Auto-SOC)"
