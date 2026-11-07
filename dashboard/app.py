@@ -1109,15 +1109,15 @@ with tab_soar:
     if active_soar:
         for act in active_soar:
             action_id = act.get("action_id")
-            act_col1, act_col2, act_col3, act_col4 = st.columns([1.8, 2, 3.7, 1.8])
+            act_col1, act_col2, act_col3, act_col4 = st.columns([1.5, 2, 4, 1.5])
             with act_col1:
-                st.markdown(f"**`{act.get('action_type')}`**<br/><span style='color:#ef4444; font-size:0.75rem; font-weight:700;'>🔒 LOCKED & ENFORCED</span>", unsafe_allow_html=True)
+                st.markdown(f"**`{act.get('action_type')}`**")
             with act_col2:
                 st.markdown(f"Target: `{act.get('target')}`")
             with act_col3:
                 st.markdown(f"<span style='color:#94a3b8; font-size:0.85rem;'>{act.get('reason')}</span>", unsafe_allow_html=True)
             with act_col4:
-                if st.button("🔓 Unlock / Rollback", key=f"rb_{action_id}", use_container_width=True):
+                if st.button("🔄 Rollback", key=f"rb_{action_id}", use_container_width=True):
                     rb_res = post_api(f"/api/soar/actions/{action_id}/rollback")
                     if rb_res:
                         st.session_state["last_soar_rollback"] = {
@@ -1125,24 +1125,24 @@ with tab_soar:
                             "target": act.get("target"),
                             "type": act.get("action_type")
                         }
-                        st.toast(f"🔓 Target {act.get('target')} successfully UNLOCKED!", icon="🔓")
+                        st.toast(f"🔄 Target {act.get('target')} successfully rolled back!", icon="🔄")
                         st.rerun()
     else:
         st.info("No active containment actions currently enforced. System perimeter is normal.")
 
     if "last_soar_rollback" in st.session_state:
         lr = st.session_state["last_soar_rollback"]
-        st.success(f"🔓 **Containment Reversal Confirmed:** Target `{lr['target']}` ({lr['type']}) has been **UNLOCKED** and perimeter policy restored.")
+        st.success(f"🔄 **Containment Reversal Confirmed:** Target `{lr['target']}` ({lr['type']}) has been rolled back and perimeter policy restored.")
 
     if history_soar:
         st.markdown("<br/>", unsafe_allow_html=True)
         st.markdown(f'<div class="section-header">⚪ Containment History & Audit Log ({len(history_soar)})</div>', unsafe_allow_html=True)
         df_hist = pd.DataFrame(history_soar)
         if "status" in df_hist.columns:
-            df_hist["Lock Status"] = df_hist["status"].apply(
-                lambda s: "🔓 UNLOCKED (Rolled Back)" if s == "ROLLED_BACK" else "🔒 LOCKED (Active Enforcement)"
+            df_hist["Status"] = df_hist["status"].apply(
+                lambda s: "ROLLED BACK" if s == "ROLLED_BACK" else "ENFORCED"
             )
-        cols_to_show = [c for c in ["action_id", "action_type", "target", "Lock Status", "reason", "executed_at", "rolled_back_at"] if c in df_hist.columns]
+        cols_to_show = [c for c in ["action_id", "action_type", "target", "Status", "reason", "executed_at", "rolled_back_at"] if c in df_hist.columns]
         st.dataframe(df_hist[cols_to_show], use_container_width=True)
 
 
