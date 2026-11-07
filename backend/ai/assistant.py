@@ -123,7 +123,7 @@ class AIAssistant:
         AIAssistant._last_ollama_check = now
         return AIAssistant._ollama_available
 
-    def analyze_incident(self, incident_id: str) -> AIAnalysisResult:
+    def analyze_incident(self, incident_id: str, skip_llm: bool = False) -> AIAnalysisResult:
         """Run AI-assisted analysis for the specified incident."""
         incident = self.db.get_incident(incident_id)
         if not incident:
@@ -140,8 +140,8 @@ class AIAssistant:
         unique_event_ids = list(dict.fromkeys(all_event_ids))
         events = self.db.get_events_by_ids(unique_event_ids)
 
-        # Attempt to call Ollama
-        ai_response_text = self._query_ollama(incident, detections, events)
+        # Attempt to call Ollama (unless skip_llm is requested for fast batch cycles)
+        ai_response_text = "" if skip_llm else self._query_ollama(incident, detections, events)
         model_name = self.model if ai_response_text else "soc-expert-playbook-engine"
 
         # Extract MITRE techniques and remediation
@@ -215,7 +215,7 @@ class AIAssistant:
         }
 
         try:
-            with httpx.Client(timeout=8.0) as client:
+            with httpx.Client(timeout=45.0) as client:
                 resp = client.post(self.ollama_url, json=payload)
                 if resp.status_code == 200:
                     data = resp.json()

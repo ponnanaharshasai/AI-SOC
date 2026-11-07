@@ -141,13 +141,15 @@ class AutonomousSOCEngine:
         ai_reports_count = 0
         soar_actions_count = 0
 
-        for inc in target_batch:
+        for idx, inc in enumerate(target_batch):
             incident_id = inc.get("incident_id")
             try:
-                # 5a. Run AI Analyst
-                analysis = self.ai_assistant.analyze_incident(incident_id)
+                # 5a. Run AI Analyst (Use live LLM for the top-priority incident, and instant expert matrix for the remainder)
+                run_without_llm = idx >= 1
+                analysis = self.ai_assistant.analyze_incident(incident_id, skip_llm=run_without_llm)
                 ai_reports_count += 1
-                logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 AI Analyst completed forensic investigation for Incident {incident_id} ('{inc.get('title')}'). MITRE tactics mapped.")
+                model_tag = "Qwen LLM" if not run_without_llm and analysis.model_used != "soc-expert-playbook-engine" else "Expert Matrix"
+                logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 AI Analyst completed forensic investigation for Incident {incident_id} ('{inc.get('title')}') [{model_tag}]. MITRE tactics mapped.")
 
                 # 5b. Run SOAR Active Containment
                 inc_details = self.db.get_incident(incident_id)

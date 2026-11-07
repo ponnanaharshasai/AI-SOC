@@ -458,7 +458,7 @@ def fetch_api(path: str):
     return None
 
 
-def post_api(path: str, json_data: dict = None, timeout: float = 30.0):
+def post_api(path: str, json_data: dict = None, timeout: float = 120.0):
     try:
         with httpx.Client(timeout=timeout) as client:
             resp = client.post(f"{api_url}{path}", json=json_data)
