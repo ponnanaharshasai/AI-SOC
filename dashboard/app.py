@@ -386,6 +386,8 @@ with st.sidebar:
                 st.session_state["last_auto_summary"] = res.get("summary")
                 st.toast("⚡ Autonomous AI-SOC Mission completed!", icon="🚀")
                 st.rerun()
+            else:
+                st.error(f"❌ Auto-Pilot error: {st.session_state.get('last_api_error', 'Request failed.')}")
 
     if st.button("📥  INGEST & NORMALIZE LOGS", use_container_width=True, disabled=not backend_online):
         with st.spinner("Ingesting telemetry..."):
@@ -458,13 +460,19 @@ def fetch_api(path: str):
     return None
 
 
-def post_api(path: str, json_data: dict = None, timeout: float = 120.0):
+def post_api(path: str, json_data: dict = None, timeout: float = 180.0):
     try:
         with httpx.Client(timeout=timeout) as client:
             resp = client.post(f"{api_url}{path}", json=json_data)
             if resp.status_code in [200, 201]:
                 return resp.json()
-    except Exception:
+            else:
+                err_text = resp.text[:300]
+                st.session_state["last_api_error"] = f"HTTP {resp.status_code}: {err_text}"
+    except httpx.TimeoutException:
+        st.session_state["last_api_error"] = f"Request timed out after {int(timeout)} seconds."
+    except Exception as e:
+        st.session_state["last_api_error"] = str(e)
         return None
     return None
 
@@ -607,7 +615,8 @@ with tab_autopilot:
                 st.success("✅ Autonomous AI-SOC Mission successfully completed!")
                 st.rerun()
             else:
-                st.error("❌ Autonomous execution encountered an error. Check backend logs.")
+                err_msg = st.session_state.get("last_api_error", "Check backend terminal logs for details.")
+                st.error(f"❌ Autonomous execution encountered an error: {err_msg}")
 
     # Display Last Mission Summary if available
     last_summary = st.session_state.get("last_auto_summary")

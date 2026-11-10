@@ -14,13 +14,13 @@ Severity: {incident_dict.get('severity')}
 Source IP: {incident_dict.get('source_ip', 'Unknown')}
 Target Username: {incident_dict.get('username', 'Unknown')}
 Created At: {incident_dict.get('created_at')}
-
-### Correlated Threat Detections ({len(detections)}):
 """
-    for idx, d in enumerate(detections, 1):
+    sample_detections = detections[:5]
+    prompt += f"\n### Correlated Threat Detections ({len(detections)} total, showing top {len(sample_detections)}):\n"
+    for idx, d in enumerate(sample_detections, 1):
         prompt += f"{idx}. Rule: {d.get('rule_id')} | Type: {d.get('detection_type')} | Severity: {d.get('severity')}\n"
         prompt += f"   Description: {d.get('description')}\n"
-        prompt += f"   Evidence: {d.get('evidence')}\n"
+        prompt += f"   Evidence: {str(d.get('evidence'))[:200]}\n"
 
     prompt += f"\n### Supporting Log Telemetry (Sample of {min(len(events), 10)} events):\n"
     for e in events[:10]:

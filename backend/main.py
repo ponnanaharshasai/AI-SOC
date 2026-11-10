@@ -272,16 +272,20 @@ def run_autonomous_soc(
     window: int = Query(600, description="Correlation window in seconds")
 ):
     """Run an end-to-end Autonomous AI-SOC cycle: Ingest -> Correlate -> Detect -> Cluster -> AI Investigate -> SOAR Contain."""
-    engine = AutonomousSOCEngine(db_manager)
-    summary = engine.run_full_autonomous_cycle(
-        ingest_sample=ingest_sample,
-        filename=filename,
-        window_seconds=window
-    )
-    return {
-        "status": "success",
-        "summary": summary.model_dump(mode="json")
-    }
+    try:
+        engine = AutonomousSOCEngine(db_manager)
+        summary = engine.run_full_autonomous_cycle(
+            ingest_sample=ingest_sample,
+            filename=filename,
+            window_seconds=window
+        )
+        return {
+            "status": "success",
+            "summary": summary.model_dump(mode="json")
+        }
+    except Exception as e:
+        logger.exception("Error during autonomous SOC cycle")
+        raise HTTPException(status_code=500, detail=f"Autonomous cycle failed: {str(e)}")
 
 
 @app.get("/api/autonomous/status")

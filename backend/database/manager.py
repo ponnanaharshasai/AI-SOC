@@ -26,14 +26,17 @@ class DatabaseManager:
             self.db_path = os.path.normpath(clean_path)
 
     def get_connection(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=60.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 60000")
         return conn
 
     def initialize_database(self):
         try:
             with closing(self.get_connection()) as conn:
                 cursor = conn.cursor()
+                cursor.execute("PRAGMA journal_mode = WAL")
+                cursor.execute("PRAGMA synchronous = NORMAL")
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS normalized_events (
                         event_id TEXT PRIMARY KEY,

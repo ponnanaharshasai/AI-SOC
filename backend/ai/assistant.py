@@ -211,15 +211,22 @@ class AIAssistant:
             "model": self.model,
             "prompt": prompt,
             "system": SYSTEM_PROMPT,
-            "stream": False
+            "stream": False,
+            "options": {
+                "num_predict": 256,
+                "temperature": 0.2
+            }
         }
 
         try:
-            with httpx.Client(timeout=45.0) as client:
+            logger.info(f"Querying Ollama at {self.ollama_url} with model {self.model} (max 256 tokens)...")
+            with httpx.Client(timeout=90.0) as client:
                 resp = client.post(self.ollama_url, json=payload)
                 if resp.status_code == 200:
                     data = resp.json()
-                    return data.get("response", "").strip()
+                    ans = data.get("response", "").strip()
+                    logger.info(f"Ollama returned {len(ans)} chars successfully.")
+                    return ans
         except Exception as e:
             logger.info(f"Ollama local service query failed ({e}). Using deterministic expert response.")
         return ""

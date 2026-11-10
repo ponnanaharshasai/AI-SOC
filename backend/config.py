@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     correlation_window_seconds: int = 300  # 5 minutes default
 
     # AI settings (to be used later)
-    ollama_host: str = "http://localhost:11434"
+    ollama_host: str = "http://127.0.0.1:11434"
     ai_model_name: str = "qwen2.5:7b"
     # Detection Thresholds
     brute_force_threshold_count: int = 5

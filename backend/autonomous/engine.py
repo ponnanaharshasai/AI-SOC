@@ -152,9 +152,9 @@ class AutonomousSOCEngine:
                 logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 AI Analyst completed forensic investigation for Incident {incident_id} ('{inc.get('title')}') [{model_tag}]. MITRE tactics mapped.")
 
                 # 5b. Run SOAR Active Containment
-                inc_details = self.db.get_incident(incident_id)
-                det_ids = inc_details.get("detection_ids", [])
-                inc_detections = self.db.get_detections_by_ids(det_ids)
+                inc_details = self.db.get_incident(incident_id) or inc
+                det_ids = inc_details.get("detection_ids", []) if isinstance(inc_details, dict) else []
+                inc_detections = self.db.get_detections_by_ids(det_ids) if det_ids else []
                 actions = self.soar_engine.evaluate_and_contain_incident(inc_details, inc_detections)
                 soar_actions_count += len(actions)
 
